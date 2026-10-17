@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "0.2.0"
+		"file_version": "0.2.1"
 	},
 	"info": {
 		"0409": {
-			"ProductVersion": "0.2.0",
+			"ProductVersion": "0.2.1",
 			"CompanyName": "hgta",
 			"FileDescription": "FlashGet-inspired download manager",
 			"LegalCopyright": "Copyright (c) 2026 hgta",

@@ -1,6 +1,8 @@
-# FlashDown v0.2.0
+# FlashDown v0.2.1
 
 本次发布的重点不是新功能，而是**让失败开口说话**。
+
+> v0.2.0 的构建里版本号没有更新（程序内显示 0.1.0），本版修正该问题；功能与 v0.2.0 相同。
 
 ## 本版变化
 
@@ -21,7 +23,7 @@ README、本说明、以及压缩包内的 `SYSTEM-REQUIREMENTS.txt` 都声明�
 
 ## 下载
 
-`flashdown-v0.2.0-win64.zip` → 解压得到 `flashdown.exe` 与 `SYSTEM-REQUIREMENTS.txt`，双击 `flashdown.exe` 即可运行。
+`flashdown-v0.2.1-win64.zip` → 解压得到 `flashdown.exe` 与 `SYSTEM-REQUIREMENTS.txt`，双击 `flashdown.exe` 即可运行。
 
 ## 系统要求
 

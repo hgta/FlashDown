@@ -12,7 +12,7 @@ import (
 )
 
 // Version is stamped into the startup payload.
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 // StartupInfo is everything the frontend needs for its first paint, so it can
 // go from mounted to rendered in a single round trip instead of three calls.
