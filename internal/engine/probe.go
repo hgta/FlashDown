@@ -21,6 +21,14 @@ type ProbeResult struct {
 	ETag      string // fingerprint half 1
 	Modified  string // fingerprint half 2
 	Filename  string // best guess at a file name, never empty
+
+	// SourceURL is where the redirects landed, when they went somewhere else.
+	//
+	// Release hosting hands out a short-lived signed URL through a 302, and the
+	// redirecting host is often the slow or blocked part of the path. Following
+	// it once per block would pay that cost for every block; following it once
+	// and then talking to the target directly does not.
+	SourceURL string
 }
 
 // Probe asks the server what it has.
@@ -54,6 +62,13 @@ func Probe(ctx context.Context, client *http.Client, rawURL string) (ProbeResult
 		ETag:     resp.Header.Get("ETag"),
 		Modified: resp.Header.Get("Last-Modified"),
 		Filename: filenameFrom(resp),
+	}
+	// resp.Request is the request that produced this response, i.e. after the
+	// client followed any redirect chain. Only worth recording when it moved.
+	if resp.Request != nil && resp.Request.URL != nil {
+		if final := resp.Request.URL.String(); final != rawURL {
+			out.SourceURL = final
+		}
 	}
 
 	switch resp.StatusCode {

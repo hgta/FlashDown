@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"strings"
+
+	"github.com/hgta/flashdown/internal/config"
 )
 
 // AddTaskRequest is what the new-task dialog sends.
@@ -31,6 +33,8 @@ type TaskController interface {
 	PauseAll()
 	Restart(id string) error
 	Remove(id string, deleteFile bool) error
+	/** SetMaxJets returns the count actually in effect after clamping. */
+	SetMaxJets(n int) int
 }
 
 // ErrNoEngine explains a control that has nothing to act on.
@@ -135,6 +139,28 @@ func (s *Service) RemoveTask(id string, deleteFile bool) error {
 		return err
 	}
 	return ctrl.Remove(id, deleteFile)
+}
+
+// SetMaxJets changes how many connections a download may use and persists the
+// choice. Running tasks pick it up without a restart (3.4).
+func (s *Service) SetMaxJets(n int) (int, error) {
+	ctrl, err := s.controller()
+	if err != nil {
+		return 0, err
+	}
+
+	n = ctrl.SetMaxJets(n)
+
+	s.mu.Lock()
+	s.cfg.MaxJets = n
+	cfg := s.cfg
+	s.mu.Unlock()
+
+	cfg.Normalize()
+	if saveErr := config.Save(cfg); saveErr != nil {
+		return n, saveErr
+	}
+	return n, nil
 }
 
 // PickFolder opens the OS directory chooser. Asking a user to type a Windows path

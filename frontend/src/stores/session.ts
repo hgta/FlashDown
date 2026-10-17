@@ -264,6 +264,40 @@ export const selectedTask = computed(
   () => state.snapshot.tasks.find((t) => t.id === state.selectedId) ?? null,
 )
 
+/**
+ * Whether the selected task can be started or paused.
+ *
+ * Shared by the toolbar and the task menu so the two can never disagree about
+ * it; an errored task is startable because that is how a retry happens.
+ */
+export const canStartSelected = computed(() => {
+  const task = selectedTask.value
+  if (!task) return false
+  return task.state === 'paused' || task.state === 'error' || task.state === 'draft'
+})
+
+export const canPauseSelected = computed(() => {
+  const task = selectedTask.value
+  if (!task) return false
+  return task.state === 'downloading' || task.state === 'probing' || task.state === 'waiting'
+})
+
+/** Connection count in effect. Changing it applies to running tasks at once. */
+export const maxJets = computed(() => state.config?.maxJets ?? 5)
+
+/** The menu offers these; the engine clamps to 1..30 regardless. */
+export const JET_CHOICES = [1, 3, 5, 8, 16, 30] as const
+
+export async function setMaxJets(n: number): Promise<void> {
+  if (!state.config || state.config.maxJets === n) return
+  try {
+    const applied = await Service.SetMaxJets(n)
+    state.config.maxJets = applied
+  } catch (err) {
+    state.lastError = `设置连接数失败：${String(err)}`
+  }
+}
+
 /** The columns actually shown, resolved from config so the order is user-driven. */
 export const activeColumns = computed(() => {
   const ids = state.config?.ui.columns?.length ? state.config.ui.columns : Object.keys(COLUMNS)

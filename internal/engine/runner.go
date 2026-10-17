@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,6 +23,12 @@ const (
 	// renameAttempts covers the antivirus-holds-the-handle case from the risk
 	// table: a few quick retries usually outlast a scanner.
 	renameAttempts = 5
+	// scheduleTick is how often the supervisor reconciles the connection count
+	// with the settings: small enough to feel immediate, large enough to be free.
+	scheduleTick = 250 * time.Millisecond
+	// maxJetsCeiling mirrors config's clamp, so a bad setting cannot open 500
+	// sockets no matter what arrives through the settings API.
+	maxJetsCeiling = 30
 )
 
 // stallWindow is 2.10: sixty seconds of silence is a failure, not patience.
@@ -37,9 +44,21 @@ var (
 // is sending the whole file from byte zero (2.8).
 var errRangeDowngrade = errors.New("server ignored the range request")
 
+// errSourceExpired means the redirect target stopped accepting requests, which
+// is what a short-lived signed URL does once its window closes. The original
+// URL is still good, so this is a refresh signal rather than a failure.
+var errSourceExpired = errors.New("signed download address expired")
+
+// maxSourceRefreshes bounds re-probing, so an address that keeps refusing can
+// never turn into an endless loop.
+const maxSourceRefreshes = 3
+
 // runState is the bookkeeping shared by the stream loop and the retry loop: the
 // writer, where to flush, and the sampling window used for the speed readout.
 type runState struct {
+	// mu serialises flush: every jet calls it after writing, and the journal
+	// must never be written twice at once.
+	mu        sync.Mutex
 	w         *Writer
 	journal   string
 	lastFlush time.Time
@@ -53,6 +72,9 @@ type runState struct {
 // The order matters: Sync the data first, then write the journal. A journal that
 // claims bytes which are still in the page cache would resume into a hole.
 func (rs *runState) flush(t *Task, force bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
 	now := time.Now()
 
 	if elapsed := now.Sub(rs.sampleAt); elapsed >= time.Second {
@@ -106,6 +128,11 @@ func (m *Manager) download(ctx context.Context, t *Task) {
 	}
 	dataPath, journalPath := Paths(t.Dir, t.Name())
 
+	// Every block goes to the redirect target from here on. Release hosting
+	// answers the first request with a signed URL on a different host, and that
+	// host is frequently the only one of the two that is reachable at all.
+	t.setSourceURL(pr.SourceURL)
+
 	resume := "不支持续传"
 	if pr.Resumable {
 		resume = "支持断点续传"
@@ -156,12 +183,17 @@ func (m *Manager) download(ctx context.Context, t *Task) {
 	// second, the next run must still know the block layout.
 	rs.flush(t, true)
 
-	// ---- 4. stream, retrying transient failures (2.11)
+	// ---- 4. fetch the plan with N connections, retrying transient failures
+	// (2.11 / 3.2-3.4)
 	attempts := 0
+	refreshes := 0
 	maxAttempts := cfg.Retry.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
+
+	t.setState(StateDownloading)
+	t.logf("开始下载：%d 个连接，共 %d 块", m.desiredJets(t.PendingBlocks()), t.BlockCount())
 
 	for {
 		if ctx.Err() != nil {
@@ -169,38 +201,67 @@ func (m *Manager) download(ctx context.Context, t *Task) {
 			return
 		}
 
-		idx := NextIncomplete(blocks)
-		if idx < 0 {
+		// runJets only returns nil once the queue is empty, but check anyway: a
+		// second pass over a finished plan would spin.
+		if t.AllDone() {
 			break
 		}
 
-		t.setState(StateDownloading)
-		t.setJets([]Jet{{Index: 0, Start: t.blockAt(idx).Offset(), End: t.blockAt(idx).End}})
-
-		err := m.stream(ctx, t, rs, idx)
+		err := m.runJets(ctx, t, rs)
 
 		switch {
 		case err == nil:
-			attempts = 0
-			continue
-
-		case errors.Is(err, errRangeDowngrade):
-			// 2.8: fall back to one connection from the beginning, and say so -
-			// the user needs to know this file can no longer survive an interruption.
-			t.logf("服务器忽略了 Range 请求，降级为单连接下载")
-			blocks = SingleBlock(pr.Size)
-			if terr := w.Truncate(0); terr != nil {
-				t.setError(terr)
-				return
-			}
-			t.prepare(pr.Size, pr.ETag, pr.Modified, false, blocks)
-			rs.sampleAtB = 0
-			attempts = 0
 			continue
 
 		case ctx.Err() != nil:
 			m.pause(t, rs, journalPath)
 			return
+
+		case errors.Is(err, errRangeDowngrade):
+			// 2.8: fall back to one connection from the beginning, and say so -
+			// the user needs to know this file can no longer survive an interruption.
+			t.logf("服务器忽略了 Range 请求，降级为单连接下载")
+			if terr := w.Truncate(0); terr != nil {
+				t.setError(terr)
+				return
+			}
+			t.prepare(pr.Size, pr.ETag, pr.Modified, false, SingleBlock(pr.Size))
+			rs.sampleAtB = 0
+			attempts = 0
+			continue
+
+		case errors.Is(err, errSourceExpired):
+			// The signed address outlived its window. Ask the origin for a fresh
+			// one and carry on with the same plan: nothing on disk changed.
+			refreshes++
+			if refreshes > maxSourceRefreshes {
+				t.setError(fmt.Errorf("下载地址刷新 %d 次后仍被拒绝", maxSourceRefreshes))
+				return
+			}
+			t.logf("下载地址已过期，重新获取（%d/%d）", refreshes, maxSourceRefreshes)
+
+			fresh, perr := Probe(ctx, m.client, t.URL)
+			if perr != nil {
+				if ctx.Err() != nil {
+					m.pause(t, rs, journalPath)
+					return
+				}
+				t.setError(fmt.Errorf("刷新下载地址失败：%w", perr))
+				return
+			}
+			// A fresh address must describe the same file, or the blocks on disk
+			// belong to something else (2.9).
+			if fresh.Size > 0 && pr.Size > 0 && fresh.Size != pr.Size {
+				t.setError(fmt.Errorf("%w（大小 %d → %d）", ErrRemoteChanged, pr.Size, fresh.Size))
+				return
+			}
+			if pr.ETag != "" && fresh.ETag != "" && pr.ETag != fresh.ETag {
+				t.setError(fmt.Errorf("%w（ETag %s → %s）", ErrRemoteChanged, short(pr.ETag), short(fresh.ETag)))
+				return
+			}
+			t.setSourceURL(fresh.SourceURL)
+			attempts = 0
+			continue
 		}
 
 		// A failure that might pass on its own: back off, then try again.
@@ -230,6 +291,117 @@ func (m *Manager) download(ctx context.Context, t *Task) {
 	}
 
 	m.finish(t, rs, dataPath, journalPath)
+}
+
+// desiredJets is how many connections the settings ask for right now. It is read
+// on every scheduling tick, which is what lets a change take effect mid-flight.
+func (m *Manager) desiredJets(blocks int) int {
+	n := m.Config().MaxJets
+	if n < 1 {
+		n = 1
+	}
+	if n > maxJetsCeiling {
+		n = maxJetsCeiling
+	}
+	if blocks > 0 && n > blocks {
+		n = blocks
+	}
+	return n
+}
+
+// runJets drains the block queue with up to cfg.MaxJets connections and returns
+// the first real error. A nil error means the queue emptied.
+//
+// The supervisor re-reads the setting every tick, so raising the count spawns
+// more jets while lowering it is noticed by the jets themselves at their next
+// block boundary - neither has to interrupt a request in flight.
+func (m *Manager) runJets(ctx context.Context, t *Task, rs *runState) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		once     sync.Once
+		firstErr error
+		live     atomic.Int32
+		issued   atomic.Int32
+		limit    atomic.Int32
+	)
+
+	limit.Store(int32(m.desiredJets(t.PendingBlocks())))
+
+	spawn := func() {
+		jet := int(issued.Add(1)) - 1
+		live.Add(1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer live.Add(-1)
+			if err := m.jetLoop(runCtx, t, rs, jet, &live, &limit); err != nil {
+				once.Do(func() {
+					firstErr = err
+					cancel()
+				})
+			}
+		}()
+	}
+
+	for i := int32(0); i < limit.Load(); i++ {
+		spawn()
+	}
+
+	ticker := time.NewTicker(scheduleTick)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-runCtx.Done():
+			wg.Wait()
+			if firstErr != nil {
+				return firstErr
+			}
+			return runCtx.Err()
+		case <-ticker.C:
+		}
+
+		if t.AllDone() {
+			break
+		}
+
+		want := int32(m.desiredJets(t.PendingBlocks()))
+		limit.Store(want)
+		for live.Load() < want {
+			spawn()
+		}
+	}
+
+	wg.Wait()
+	return firstErr
+}
+
+// jetLoop is one connection: claim a block, fetch it, hand it back, repeat. It
+// retires when the queue is empty or the settings have lowered the count below
+// what is currently running.
+func (m *Manager) jetLoop(ctx context.Context, t *Task, rs *runState, jet int, live, limit *atomic.Int32) error {
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if live.Load() > limit.Load() {
+			return nil
+		}
+
+		idx := t.claimBlock(jet)
+		if idx < 0 {
+			return nil
+		}
+
+		err := m.stream(ctx, t, rs, idx, jet)
+		t.releaseBlock(idx, jet)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // reconcile decides what to do with existing progress.
@@ -273,23 +445,24 @@ func reconcile(t *Task, pr ProbeResult, maxJets int) (blocks []Block, restart bo
 	return cur.Blocks, false, "", nil
 }
 
-// stream fetches block idx, writing positionally as bytes arrive.
-func (m *Manager) stream(ctx context.Context, t *Task, rs *runState, idx int) error {
+// stream fetches block idx on connection jet, writing positionally as bytes
+// arrive. The claim on the block is already held by the caller.
+func (m *Manager) stream(ctx context.Context, t *Task, rs *runState, idx, jet int) error {
 	block := t.blockAt(idx)
 	offset := block.Offset()
 	if offset >= block.End {
 		return nil
 	}
 
-	// Claim the block for the duration of the request so the block map can show
-	// it as in flight; M1 has exactly one connection, hence jet 0.
-	t.setBlockJet(idx, 0)
-	defer t.setBlockJet(idx, -1)
-
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, t.URL, nil)
+	target := t.SourceURL()
+	if target == "" {
+		target = t.URL
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
@@ -340,11 +513,21 @@ func (m *Manager) stream(ctx context.Context, t *Task, rs *runState, idx int) er
 			return errRangeDowngrade
 		}
 
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// A signed address past its expiry answers 403 (or 401). The original URL
+		// still works, so let the retry loop fetch a new one.
+		return errSourceExpired
+
 	default:
 		return statusOf(resp)
 	}
 
 	buf := make([]byte, readBuffer)
+	// Per-jet rate: sampled once a second, published on every write so the Jet
+	// tab moves smoothly without recomputing a rate per buffer.
+	rateAt, rateBytes := time.Now(), int64(0)
+	var rate int64
+
 	for offset < block.End {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
@@ -358,6 +541,13 @@ func (m *Manager) stream(ctx context.Context, t *Task, rs *runState, idx int) er
 			offset += int64(n)
 			t.advance(idx, int64(n))
 			guard.touch()
+
+			if now := time.Now(); now.Sub(rateAt) >= time.Second {
+				rate = int64(float64(offset-block.Start-rateBytes) / now.Sub(rateAt).Seconds())
+				rateAt, rateBytes = now, offset-block.Start
+			}
+			t.jetProgress(jet, offset-block.Start, rate)
+
 			rs.flush(t, false)
 		}
 
@@ -381,7 +571,7 @@ func (m *Manager) stream(ctx context.Context, t *Task, rs *runState, idx int) er
 	}
 
 	rs.flush(t, true)
-	t.logf("分块 %d/%d 完成（%d 字节）", idx+1, t.BlockCount(), block.Len())
+	t.logf("连接 %d 完成分块 %d/%d（%d 字节）", jet+1, idx+1, t.BlockCount(), block.Len())
 	return nil
 }
 
@@ -408,7 +598,12 @@ func (m *Manager) downloadUnknownSize(ctx context.Context, t *Task, dataPath, jo
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, t.URL, nil)
+	target := t.SourceURL()
+	if target == "" {
+		target = t.URL
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
 	if err != nil {
 		t.setError(err)
 		return

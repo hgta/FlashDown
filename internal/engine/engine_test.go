@@ -69,6 +69,9 @@ type testServer struct {
 	mu     sync.Mutex
 	ranges []string
 	count  int
+
+	inflight atomic.Int32
+	peak     atomic.Int32
 }
 
 func newTestServer(t *testing.T, opts serverOpts) *testServer {
@@ -100,7 +103,20 @@ func (s *testServer) Requests() []string {
 	return append([]string(nil), s.ranges...)
 }
 
+// MaxConcurrent is the largest number of requests the server had in flight at
+// once: the only honest way for a test to prove jets really overlap.
+func (s *testServer) MaxConcurrent() int { return int(s.peak.Load()) }
+
 func (s *testServer) handle(w http.ResponseWriter, r *http.Request) {
+	cur := s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	for {
+		peak := s.peak.Load()
+		if cur <= peak || s.peak.CompareAndSwap(peak, cur) {
+			break
+		}
+	}
+
 	rng := r.Header.Get("Range")
 
 	s.mu.Lock()
@@ -420,6 +436,217 @@ func TestDownloadCompletes(t *testing.T) {
 	}
 	if v.Speed != 0 {
 		t.Errorf("speed should settle at 0 when finished, got %d", v.Speed)
+	}
+}
+
+// newParallelManager builds a manager with a chosen connection count, since the
+// shared fixture deliberately pins MaxJets to 1.
+func newParallelManager(t *testing.T, dir string, jets int) *Manager {
+	t.Helper()
+	cfg := testConfig(dir)
+	cfg.MaxJets = jets
+	m := New(cfg)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.Shutdown(ctx)
+	})
+	return m
+}
+
+func TestParallelJetsUseSeveralConnections(t *testing.T) {
+	payload := patternBytes(4 << 20)
+	ts := newTestServer(t, serverOpts{
+		payload:    payload,
+		etag:       `"v1"`,
+		chunkSize:  64 << 10,
+		chunkDelay: 3 * time.Millisecond,
+	})
+
+	dir := t.TempDir()
+	m := newParallelManager(t, dir, 4)
+	task, err := m.Add(Spec{URL: ts.URL(), Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitState(t, task, StateFinished)
+	assertFile(t, filepath.Join(dir, task.Name()), payload)
+
+	if got := ts.MaxConcurrent(); got < 2 {
+		t.Errorf("server saw at most %d concurrent requests, want >= 2", got)
+	}
+	if got := task.View().Jets; got != 0 {
+		t.Errorf("jets = %d after finishing, want 0", got)
+	}
+}
+
+func TestParallelPauseThenResumeKeepsBytes(t *testing.T) {
+	payload := patternBytes(8 << 20)
+	ts := newTestServer(t, serverOpts{
+		payload:    payload,
+		etag:       `"v1"`,
+		chunkSize:  64 << 10,
+		chunkDelay: 8 * time.Millisecond,
+	})
+
+	dir := t.TempDir()
+	m := newParallelManager(t, dir, 4)
+	task, err := m.Add(Spec{URL: ts.URL(), Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitUntil(t, "some progress", func() bool { return task.Done() > 0 })
+	if err := m.Pause(task.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	waitState(t, task, StatePaused)
+
+	partial := task.Done()
+	if partial <= 0 || partial >= int64(len(payload)) {
+		t.Fatalf("partial = %d, want something in (0, %d)", partial, len(payload))
+	}
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	waitState(t, task, StateFinished)
+	assertFile(t, filepath.Join(dir, task.Name()), payload)
+}
+
+// 3.4: raising the count mid-flight must spawn more connections without a
+// restart, and the file must still come out byte-perfect.
+func TestMaxJetsTakesEffectMidFlight(t *testing.T) {
+	payload := patternBytes(4 << 20)
+	ts := newTestServer(t, serverOpts{
+		payload:    payload,
+		etag:       `"v1"`,
+		chunkSize:  64 << 10,
+		chunkDelay: 10 * time.Millisecond,
+	})
+
+	dir := t.TempDir()
+	m := newParallelManager(t, dir, 1)
+	task, err := m.Add(Spec{URL: ts.URL(), Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitUntil(t, "some progress", func() bool { return task.Done() > 0 })
+
+	if got := m.SetMaxJets(4); got != 4 {
+		t.Fatalf("SetMaxJets(4) = %d", got)
+	}
+	waitState(t, task, StateFinished)
+	assertFile(t, filepath.Join(dir, task.Name()), payload)
+
+	if got := ts.MaxConcurrent(); got < 2 {
+		t.Errorf("server saw at most %d concurrent requests after raising the count", got)
+	}
+}
+
+// Release hosting answers with a 302 to a signed URL on another host, and that
+// host is sometimes the only one reachable. Every block must go straight there
+// instead of paying for the redirect again.
+func TestRedirectTargetIsUsedForBlocks(t *testing.T) {
+	payload := patternBytes(600 << 10)
+	cdn := newTestServer(t, serverOpts{payload: payload, etag: `"v1"`, chunkSize: 128 << 10})
+
+	var originHits atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHits.Add(1)
+		http.Redirect(w, r, cdn.URL(), http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	dir := t.TempDir()
+	m := New(testConfig(dir))
+	task, err := m.Add(Spec{URL: origin.URL + "/file.bin", Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.Shutdown(ctx)
+	})
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitState(t, task, StateFinished)
+	assertFile(t, filepath.Join(dir, task.Name()), payload)
+
+	if got := originHits.Load(); got != 1 {
+		t.Errorf("origin was asked %d times, want 1 (the probe)", got)
+	}
+}
+
+// A signed URL that outlives its window answers 403. The plan is still valid, so
+// the engine should ask the origin for a fresh address instead of failing.
+func TestExpiredSignedURLIsRefreshed(t *testing.T) {
+	payload := patternBytes(600 << 10)
+	inner := newTestServer(t, serverOpts{payload: payload, etag: `"v1"`, chunkSize: 128 << 10})
+
+	var expired atomic.Bool
+	expired.Store(true)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isProbe := r.Header.Get("Range") == "bytes=0-0"
+		if !isProbe && expired.Swap(false) {
+			http.Error(w, "signature expired", http.StatusForbidden)
+			return
+		}
+		inner.handle(w, r)
+	}))
+	t.Cleanup(cdn.Close)
+
+	var originHits atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHits.Add(1)
+		http.Redirect(w, r, cdn.URL+"/file.bin", http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	dir := t.TempDir()
+	m := New(testConfig(dir))
+	task, err := m.Add(Spec{URL: origin.URL + "/file.bin", Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.Shutdown(ctx)
+	})
+
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitState(t, task, StateFinished)
+	assertFile(t, filepath.Join(dir, task.Name()), payload)
+
+	if got := originHits.Load(); got != 2 {
+		t.Errorf("origin was asked %d times, want 2 (probe + refresh)", got)
+	}
+	var refreshed bool
+	for _, line := range task.Detail().Log {
+		if strings.Contains(line, "重新获取") {
+			refreshed = true
+		}
+	}
+	if !refreshed {
+		t.Errorf("log should mention the refresh: %v", task.Detail().Log)
 	}
 }
 

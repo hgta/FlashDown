@@ -6,7 +6,16 @@
  * tooltip instead of silently doing nothing - a visible, honest "not yet"
  * beats a dead button the user has to guess about.
  */
-import { openFolder, openTaskDialog, state } from '../stores/session'
+import { computed } from 'vue'
+import {
+  canPauseSelected,
+  canStartSelected,
+  openFolder,
+  openTaskDialog,
+  pauseTask,
+  startTask,
+  state,
+} from '../stores/session'
 
 interface Tool {
   id: string
@@ -21,8 +30,12 @@ interface Tool {
 }
 
 const ENGINE = '下载引擎接入后可用（M1）'
+const NO_START = '选中一个已暂停或出错的任务才能开始'
+const NO_PAUSE = '选中一个正在下载的任务才能暂停'
 
-const tools: Tool[] = [
+// Start and pause only make sense for some states, so the toolbar asks the store
+// rather than offering a button that quietly does nothing.
+const tools = computed<Tool[]>(() => [
   {
     id: 'new',
     label: '新建',
@@ -35,13 +48,21 @@ const tools: Tool[] = [
     path: 'M5.5 2.5h6l2.5 2.5v7.5h-8.5z M3 5.2v8.5h8',
     disabled: ENGINE,
   },
-  { id: 'start', label: '开始', path: 'M5 3.4l8.4 4.6L5 12.6z', filled: true, disabled: ENGINE },
+  {
+    id: 'start',
+    label: '开始',
+    path: 'M5 3.4l8.4 4.6L5 12.6z',
+    filled: true,
+    disabled: canStartSelected.value ? '' : NO_START,
+    action: () => void startTask(state.selectedId),
+  },
   {
     id: 'pause',
     label: '暂停',
     path: 'M5 3.4h2.3v9.2H5z M8.7 3.4H11v9.2H8.7z',
     filled: true,
-    disabled: ENGINE,
+    disabled: canPauseSelected.value ? '' : NO_PAUSE,
+    action: () => void pauseTask(state.selectedId),
   },
   {
     id: 'delete',
@@ -72,7 +93,7 @@ const tools: Tool[] = [
     groupStart: true,
     disabled: '选项对话框（M3–M4）',
   },
-]
+])
 </script>
 
 <template>
@@ -83,6 +104,7 @@ const tools: Tool[] = [
         type="button"
         class="tool"
         :class="{ disabled: !!tool.disabled }"
+        :disabled="!!tool.disabled"
         :title="tool.disabled || tool.label"
         :aria-label="tool.label"
         @click="tool.action?.()"

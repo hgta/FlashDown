@@ -98,6 +98,10 @@ type Task struct {
 	resumable bool
 	etag      string
 	modified  string
+	// source is the URL the data requests go to: the redirect target when the
+	// probe was redirected, otherwise empty (meaning URL itself). Signed
+	// release URLs expire, so this is refreshed on demand.
+	source    string
 	blocks    []Block
 	jets      []Jet
 	log       []string
@@ -132,6 +136,20 @@ func (t *Task) Name() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.name
+}
+
+// SourceURL is the address byte ranges are fetched from. Empty means the
+// original URL never redirected, so that URL is the source.
+func (t *Task) SourceURL() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.source
+}
+
+func (t *Task) setSourceURL(u string) {
+	t.mu.Lock()
+	t.source = u
+	t.mu.Unlock()
 }
 
 // View is a consistent snapshot of the row for the UI.
@@ -242,12 +260,90 @@ func (t *Task) prepare(size int64, etag, modified string, resumable bool, blocks
 	t.mu.Unlock()
 }
 
-// setBlockJet records which connection is writing block i, so the block map can
-// show work in progress rather than only the bytes already on disk.
-func (t *Task) setBlockJet(i, jet int) {
+// AllDone reports whether every planned byte is on disk.
+func (t *Task) AllDone() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return AllDone(t.blocks)
+}
+
+// PendingBlocks counts blocks that still need bytes, claimed or not. The
+// scheduler uses it so it never spawns a connection with nothing to fetch.
+func (t *Task) PendingBlocks() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	n := 0
+	for i := range t.blocks {
+		if !t.blocks[i].Complete() {
+			n++
+		}
+	}
+	return n
+}
+
+// claimBlock hands jet the next block to fetch, or -1 when there is nothing left.
+//
+// A block that was interrupted mid-flight goes first, so a resume continues where
+// it stopped instead of spreading a thin layer over the whole file; after that
+// the largest remaining block wins, which is what keeps the tail short (3.2).
+func (t *Task) claimBlock(jet int) int {
 	t.mu.Lock()
-	if i >= 0 && i < len(t.blocks) {
-		t.blocks[i].Jet = jet
+	defer t.mu.Unlock()
+
+	best, partial := -1, -1
+	var bestRemain int64
+
+	for i := range t.blocks {
+		b := &t.blocks[i]
+		if b.Complete() || b.Jet >= 0 {
+			continue
+		}
+		if b.Done > 0 && partial < 0 {
+			partial = i
+		}
+		if remain := b.Remaining(); remain > bestRemain {
+			best, bestRemain = i, remain
+		}
+	}
+
+	if partial >= 0 {
+		best = partial
+	}
+	if best < 0 {
+		return -1
+	}
+
+	b := &t.blocks[best]
+	b.Jet = jet
+	t.jets = append(t.jets, Jet{Index: jet, Start: b.Offset(), End: b.End})
+	return best
+}
+
+// releaseBlock returns a block to the pool and drops the jet's row from the tab.
+func (t *Task) releaseBlock(idx, jet int) {
+	t.mu.Lock()
+	if idx >= 0 && idx < len(t.blocks) {
+		t.blocks[idx].Jet = -1
+	}
+	for i := range t.jets {
+		if t.jets[i].Index == jet {
+			t.jets = append(t.jets[:i], t.jets[i+1:]...)
+			break
+		}
+	}
+	t.mu.Unlock()
+}
+
+// jetProgress publishes one connection's position and rate for the Jet tab.
+func (t *Task) jetProgress(jet int, done, speed int64) {
+	t.mu.Lock()
+	for i := range t.jets {
+		if t.jets[i].Index == jet {
+			t.jets[i].Done = done
+			t.jets[i].Speed = speed
+			break
+		}
 	}
 	t.mu.Unlock()
 }

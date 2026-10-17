@@ -42,6 +42,8 @@ func (p engineProvider) StartAll()              { p.m.StartAll() }
 func (p engineProvider) PauseAll()              { p.m.PauseAll() }
 func (p engineProvider) Restart(id string) error { return p.m.Restart(id) }
 
+func (p engineProvider) SetMaxJets(n int) int { return p.m.SetMaxJets(n) }
+
 func (p engineProvider) Remove(id string, deleteFile bool) error {
 	return p.m.Remove(id, deleteFile)
 }

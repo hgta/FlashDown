@@ -135,6 +135,14 @@ export function SelectTask(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * SetMaxJets changes how many connections a download may use and persists the
+ * choice. Running tasks pick it up without a restart (3.4).
+ */
+export function SetMaxJets(n: number): $CancellablePromise<number> {
+    return $Call.ByID(2645228440, n);
+}
+
+/**
  * ShowMainWindow restores and focuses the main window.
  */
 export function ShowMainWindow(): $CancellablePromise<void> {

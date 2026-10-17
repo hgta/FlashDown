@@ -1,6 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { openFolder, openTaskDialog, persistConfig, setTheme, state } from '../stores/session'
+import {
+  canPauseSelected,
+  canStartSelected,
+  JET_CHOICES,
+  maxJets,
+  openFolder,
+  openTaskDialog,
+  pauseTask,
+  persistConfig,
+  setMaxJets,
+  setTheme,
+  startTask,
+  state,
+} from '../stores/session'
 
 interface Item {
   label?: string
@@ -84,14 +97,30 @@ const menus = computed<Menu[]>(() => [
   {
     label: '任务',
     items: [
-      { label: '开始', disabled: true },
-      { label: '暂停', disabled: true },
+      {
+        label: '开始',
+        disabled: !canStartSelected.value,
+        action: () => void startTask(state.selectedId),
+      },
+      {
+        label: '暂停',
+        disabled: !canPauseSelected.value,
+        action: () => void pauseTask(state.selectedId),
+      },
       { separator: true },
       { label: '全部开始', disabled: true },
       { label: '全部暂停', disabled: true },
       { separator: true },
       { label: '上移', disabled: true },
       { label: '下移', disabled: true },
+      { separator: true },
+      // FlashGet's connection count: raised or lowered while downloading, the
+      // engine reconciles the jets on its next tick.
+      ...JET_CHOICES.map((n) => ({
+        label: `连接数：${n}`,
+        checked: maxJets.value === n,
+        action: () => void setMaxJets(n),
+      })),
       { separator: true },
       { label: '属性…', disabled: true },
     ],
@@ -202,6 +231,10 @@ function dirOf(filePath: string): string {
   border-radius: var(--radius);
   box-shadow: var(--shadow-popup);
   z-index: 50;
+  /* The task menu grew past a short window: scroll instead of clipping items
+     the user cannot reach. */
+  max-height: calc(100vh - var(--menubar-height) - 8px);
+  overflow-y: auto;
 }
 
 .item {

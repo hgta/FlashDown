@@ -72,6 +72,27 @@ func (m *Manager) ApplyConfig(cfg config.Config) {
 	m.cfgMu.Unlock()
 }
 
+// SetMaxJets changes how many connections a download may use and returns the
+// value actually stored. Running tasks pick it up at their next scheduling tick,
+// so raising or lowering the count never interrupts a request in flight (3.4).
+func (m *Manager) SetMaxJets(n int) int {
+	if n < 1 {
+		n = 1
+	}
+	if n > maxJetsCeiling {
+		n = maxJetsCeiling
+	}
+	m.cfgMu.Lock()
+	m.cfg.MaxJets = n
+	m.cfgMu.Unlock()
+	return n
+}
+
+// MaxJets is the connection count currently in effect.
+func (m *Manager) MaxJets() int {
+	return m.desiredJets(0)
+}
+
 // Config returns a copy of the settings a run should use.
 func (m *Manager) Config() config.Config {
 	m.cfgMu.RLock()

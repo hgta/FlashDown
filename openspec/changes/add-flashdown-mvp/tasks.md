@@ -37,14 +37,14 @@
 
 ## 3. M2 多线程分块
 
-- [ ] 3.1 自适应块大小：`clamp(align64KB(total/(maxJets×8)), 256KB, 8MB)`
-- [ ] 3.2 Planner：共享队列，jet 领取「剩余字节最多」的块
-- [ ] 3.3 Jet 并发循环：领块 → Range 请求 → 边读边 `WriteAt` → 还块 → 领下一块
-- [ ] 3.4 运行中动态调整 jet 数（默认 5，上限 30）
-- [ ] 3.5 块图 `<canvas>` 组件：约 300 格，按 jet 着色，2–4 fps 重绘
-- [ ] 3.6 Jet 列表组件：区间、进度条、百分比、速度
-- [ ] 3.7 全局并发上限（默认 3）与等待队列按序启动
-- [ ] 3.8 大流量下多 jet 并发写盘正确性验证
+- [x] 3.1 自适应块大小：`clamp(align64KB(total/(maxJets×8)), 256KB, 8MB)` —— `block.go` 的 `BlockSize`/`PlanBlocks`
+- [x] 3.2 Planner：共享队列，jet 领取「剩余字节最多」的块 —— `Task.claimBlock`：先续传已部分写入的块，再取剩余最多者
+- [x] 3.3 Jet 并发循环：领块 → Range 请求 → 边读边 `WriteAt` → 还块 → 领下一块 —— `runJets`/`jetLoop`，`flush` 加锁串行化 journal
+- [x] 3.4 运行中动态调整 jet 数（默认 5，上限 30）—— supervisor 每 250ms 对齐 `maxJets`：增加即时补连接，减少在块边界退出；`SetMaxJets` 持久化并即时生效
+- [x] 3.5 块图 `<canvas>` 组件：约 300 格，按 jet 着色，2–4 fps 重绘 —— `DetailPane.vue`，颜色走 `jetColor(index)`
+- [x] 3.6 Jet 列表组件：区间、进度条、百分比、速度 —— `DetailPane.vue` 的 Jet 标签，数据源 `Task.jets`
+- [x] 3.7 全局并发上限（默认 3）与等待队列按序启动 —— `Manager.gate` + `acquireSlot`
+- [x] 3.8 大流量下多 jet 并发写盘正确性验证 —— `TestParallelJetsUseSeveralConnections`（4 jet 并发、字节一致）、`TestParallelPauseThenResumeKeepsBytes`（并发暂停续传）、`TestMaxJetsTakesEffectMidFlight`（运行中升连接数）
 
 ## 4. M3 任务管理、限速、类别与批量
 

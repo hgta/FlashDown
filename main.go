@@ -58,8 +58,8 @@ func main() {
 	}
 
 	service := app.NewService(cfg, warning)
-	// Settings the engine cares about (jet count, retry policy) take effect from
-	// the next run; a task already in flight keeps the policy it started with.
+	// Retry policy and limits apply to runs that start later; only the jet count
+	// is adjustable mid-flight, through Service.SetMaxJets.
 	service.OnConfigSaved = eng.ApplyConfig
 	// Demo mode deliberately leaves the controller unset: the grid shows fabricated
 	// rows, so every control must refuse rather than act on tasks that do not exist.
