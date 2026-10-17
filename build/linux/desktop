@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=FlashDown
+Comment=FlashGet-inspired download manager
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/flashdown.exe %u
+Terminal=false
+Type=Application
+Icon=flashdown.exe
+Categories=Utility;
+StartupWMClass=flashdown.exe
+
+ 

@@ -1,0 +1,120 @@
+/*
+ * Design tokens.
+ *
+ * Layout and information density replicate FlashGet (dense 24px rows, tight
+ * controls, a tree/grid/detail three-way split) but the surfaces are rendered
+ * with a modern palette. The effective theme is always resolved in JS and
+ * written to <html data-theme="light|dark">, so there is exactly one dark block
+ * and no duplicated @media rules - see theme.ts.
+ */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --app-bg: #e9ecf0;
+  --panel-bg: #ffffff;
+  --panel-alt: #f7f8fa;
+  --panel-sunken: #f1f3f6;
+
+  --border: #d3d8e0;
+  --border-strong: #b6bdc8;
+
+  --text: #1b1f26;
+  --text-dim: #667080;
+  --text-faint: #929aa6;
+  --text-invert: #ffffff;
+
+  --accent: #2f6fed;
+  --accent-hover: #4a83f2;
+  --accent-soft: #e6eefd;
+
+  --row-alt: #fafbfc;
+  --row-hover: #eef3fe;
+  --row-selected: #d8e5fd;
+  --row-selected-border: #a9c5f7;
+
+  --progress-track: #e3e6ec;
+  --progress-fill: #3aa757;
+  --progress-fill-paused: #b0b6c0;
+  --progress-fill-error: #d9534f;
+
+  --ok: #2f9e5f;
+  --warn: #d98800;
+  --danger: #cf3b36;
+
+  --toolbar-top: #fdfefe;
+  --toolbar-bottom: #eaedf2;
+  --header-top: #fbfcfd;
+  --header-bottom: #eef1f5;
+
+  --shadow-popup: 0 6px 20px rgb(15 22 36 / 22%);
+  --focus: 0 0 0 2px rgb(47 111 237 / 45%);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --app-bg: #15171c;
+  --panel-bg: #1e2127;
+  --panel-alt: #1a1d22;
+  --panel-sunken: #23262d;
+
+  --border: #2e333c;
+  --border-strong: #3d434e;
+
+  --text: #dde3ec;
+  --text-dim: #8d97a8;
+  --text-faint: #6b7484;
+  --text-invert: #10131a;
+
+  --accent: #5b9dff;
+  --accent-hover: #77b0ff;
+  --accent-soft: #1f2c42;
+
+  --row-alt: #1b1e24;
+  --row-hover: #232833;
+  --row-selected: #24354f;
+  --row-selected-border: #3d5b8a;
+
+  --progress-track: #2b2f37;
+  --progress-fill: #3fb950;
+  --progress-fill-paused: #5c636f;
+  --progress-fill-error: #e5534b;
+
+  --ok: #3fb950;
+  --warn: #d29922;
+  --danger: #e5534b;
+
+  --toolbar-top: #23262d;
+  --toolbar-bottom: #1a1d22;
+  --header-top: #23262d;
+  --header-bottom: #1c1f25;
+
+  --shadow-popup: 0 6px 20px rgb(0 0 0 / 45%);
+  --focus: 0 0 0 2px rgb(91 157 255 / 55%);
+}
+
+/* Shared metrics. Dense on purpose - this is the FlashGet information density. */
+:root {
+  --font-ui: 'Segoe UI', system-ui, -apple-system, 'Microsoft YaHei UI', sans-serif;
+  --font-mono: Consolas, 'Cascadia Mono', ui-monospace, monospace;
+
+  --fs-menu: 12px;
+  --fs-body: 12px;
+  --fs-small: 11px;
+  --fs-title: 12px;
+
+  --row-height: 24px;
+  --header-height: 22px;
+  --toolbar-height: 30px;
+  --menubar-height: 24px;
+  --statusbar-height: 22px;
+
+  --gap-xs: 3px;
+  --gap-sm: 6px;
+  --gap-md: 10px;
+
+  --splitter: 4px;
+  --radius: 3px;
+}
