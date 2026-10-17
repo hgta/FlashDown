@@ -47,7 +47,7 @@ jobs:
         run: go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui" -o bin/flashdown.exe
 
       - name: Package
-        run: Compress-Archive -Path bin/flashdown.exe -DestinationPath "flashdown-${{ github.ref_name }}-win64.zip"
+        run: Compress-Archive -Path @('bin/flashdown.exe', 'SYSTEM-REQUIREMENTS.txt') -DestinationPath "flashdown-${{ github.ref_name }}-win64.zip"
 
       - name: Publish release
         env:

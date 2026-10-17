@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"log"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/hgta/flashdown/app"
 	"github.com/hgta/flashdown/internal/config"
 	"github.com/hgta/flashdown/internal/engine"
+	"github.com/hgta/flashdown/internal/startup"
 )
 
 //go:embed all:frontend/dist
@@ -33,9 +35,17 @@ func main() {
 		"run with fabricated tasks so the interface can be built and judged before the engine exists")
 	flag.Parse()
 
+	// The GUI subsystem has no console, so every failure below has to reach the
+	// screen through startup.Fail: a log line in a void is what made v0.1.0 look
+	// like "double-click does nothing" on Windows 8.1.
+	info, startErr := startup.Check(nil, nil)
+	if startErr != nil {
+		startup.Fail(startErr, info)
+	}
+
 	cfg, warning, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		startup.Fail(fmt.Errorf("读取配置失败：%w", err), info)
 	}
 	// A missing category directory is normal (the user may have deleted one), so
 	// this is a warning rather than a fatal error.
@@ -124,6 +134,6 @@ func main() {
 	cancel()
 
 	if runErr != nil {
-		log.Fatal(runErr)
+		startup.Fail(runErr, info)
 	}
 }

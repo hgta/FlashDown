@@ -4,7 +4,15 @@
 
 ## 下载
 
-`flashdown-v0.1.0-win64.zip` → 解压得到 `flashdown.exe`，双击即可运行（Windows 10/11 x64，需要系统自带的 WebView2 运行时）。
+`flashdown-v0.1.0-win64.zip` → 解压得到 `flashdown.exe`，双击即可运行。
+
+## 系统要求
+
+- **Windows 10 1809（build 17763）或更高**，或 Windows 11，**64 位**
+- Microsoft Edge WebView2 运行时（Windows 10 / 11 通常已内置）
+
+**Windows 7 / 8 / 8.1 不受支持。** 这些系统缺少运行所需的组件，启动时会弹窗说明原因，并把详情写入
+`%LOCALAPPDATA%\FlashDown\startup.log`。这不是安装问题，换系统才能解决。
 
 ## 这一版有什么
 

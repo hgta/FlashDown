@@ -1,59 +1,75 @@
-# Welcome to Your New Wails3 Project!
+# FlashDown
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+致敬 FlashGet 的桌面下载管理器：Go + Wails v3 + Vue 3，单文件可执行，无广告、无捆绑。
 
-## Getting Started
+多连接分块下载、断点续传、进程重启恢复、块图与 Jet 面板——FlashGet 那套"看得见分块在跑"的形态，用现代技术栈重做一遍。
 
-1. Navigate to your project directory in the terminal.
+## 系统要求
 
-2. To run your application in development mode, use the following command:
+| 项目 | 要求 |
+|---|---|
+| 系统 | **Windows 10 1809（build 17763）或更高**，或 Windows 11 |
+| 架构 | 64 位（x64） |
+| 运行时 | Microsoft Edge WebView2（Windows 10 / 11 通常已内置） |
+| 磁盘 | 约 20 MB（不含下载内容） |
 
-   ```
-   wails3 dev
-   ```
+**不支持 Windows 7 / 8 / 8.1。** Go 1.21+ 与 Wails v3 均以 Windows 10 为下限，WebView2 对 8.1 的支持也已于 2024 年结束。在不支持的系统上启动时，程序会弹窗说明原因，并把详情写入：
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+```
+%LOCALAPPDATA%\FlashDown\startup.log
+```
 
-3. To build your application for production, use:
+## 下载
 
-   ```
-   wails3 build
-   ```
+从 [Releases](https://github.com/hgta/FlashDown/releases) 取得 `flashdown-<version>-win64.zip`，解压后双击 `flashdown.exe`。
 
-   This will create a production-ready executable in the `build` directory.
+## 功能
 
-## Exploring Wails3 Features
+- 多连接分块下载，默认 5 条连接，可在「任务 → 连接数」切换 1 / 3 / 5 / 8 / 16 / 30，**下载途中调整立即生效**
+- 断点续传：暂停、退出、重启后从断点继续，字节级校验
+- 重定向下载：跟随 302 直连资源地址；签名地址过期自动重新获取
+- 服务器不支持 Range 时降级单连接，并在任务上标记「不可续传」
+- 失败自动重试（默认 5 次，指数退避），60 秒无数据判定卡死
+- 六区经典布局：菜单栏、工具栏、类别树、任务网格、详情面板（块图 / Jet / 日志）、状态栏
+- 拖动链接到窗口即可新建任务；`Ctrl+N` 打开新建对话框
+- 明暗主题跟随系统
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+## 开发
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+需要 Go 1.25、Node 20+、[wails3 CLI](https://v3.wails.io/)（版本须与 `go.mod` 一致）。
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+```powershell
+wails3 dev                     # 热重载开发模式
+wails3 build                   # 生产构建，产物在 bin/
+go test ./...                  # 后端测试
+cd frontend; npm run build     # 前端类型检查 + 打包
+```
 
-   ```
-   go run .
-   ```
+前端绑定（`frontend/bindings/`）由 `wails3 generate bindings -ts -i` 生成并提交；改了 Go 侧服务方法后需要重新生成。
 
-   Note: Some examples may be under development during the alpha phase.
+## 打包发布
 
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
+推送 `v*` tag 会触发 `.github/workflows/release.yml`：在 `windows-latest` 上构建、压缩、创建 GitHub Release。
 
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
+```powershell
+git tag -a v0.2.0 -m "FlashDown v0.2.0"
+git push origin v0.2.0
+```
 
-## Project Structure
+## 结构
 
-Take a moment to familiarize yourself with your project structure:
+```
+main.go                  启动、窗口装配、平台检查
+app/                     Wails 服务层（任务、配置、事件广播）
+internal/engine/         下载内核：分块、Jet、续传、重试（与 UI 无关）
+internal/config/         配置加载与持久化
+internal/startup/        启动诊断：系统版本、WebView2、失败弹窗与日志
+frontend/                Vue 3 界面
+openspec/                变更提案与规格
+```
 
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
+## 已知限制
 
-## Next Steps
-
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
-
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+- 仅 Windows x64
+- 批量 URL 预览、限速、类别规则编辑、计划任务尚未实现
+- 多连接对单 IP 限速的服务器无提速效果
