@@ -9,10 +9,12 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/hgta/flashdown/internal/config"
+	"github.com/hgta/flashdown/internal/version"
 )
 
-// Version is stamped into the startup payload.
-const Version = "0.2.1"
+// Version is stamped into the startup payload. The constant lives in its own
+// package because the CLI needs it too, and must not import this one.
+const Version = version.Value
 
 // StartupInfo is everything the frontend needs for its first paint, so it can
 // go from mounted to rendered in a single round trip instead of three calls.

@@ -1,12 +1,20 @@
 FlashDown 系统要求
 
+本压缩包有两个入口，要求不同：
+
+flashdown.exe（图形界面）
 - Windows 10 1809（build 17763）或更高版本，或 Windows 11
 - 64 位（x64）
 - Microsoft Edge WebView2 运行时（Windows 10 / 11 通常已内置）
 - 约 20 MB 磁盘空间（不含下载内容）
 
-不支持 Windows 7 / 8 / 8.1。
-这些系统缺少运行所需的组件，程序会弹窗说明并退出。
+flashdown-cli.exe（命令行）
+- Windows 7 SP1 及以上，64 位（x64）
+- 不依赖 WebView2，无需图形环境
+- 用法：flashdown-cli.exe <链接> [-o 目录] [-n 文件名] [-j 连接数] [-q]
+
+图形界面不支持 Windows 7 / 8 / 8.1，这些系统上双击 flashdown.exe 会弹窗说明并退出；
+同一目录下的 flashdown-cli.exe 仍可正常下载。
 
 如果启动失败，请把下面这个文件发给开发者：
 

@@ -365,34 +365,69 @@ func (m *Manager) Restore() error {
 			continue
 		}
 		seen[dir] = true
+		// A missing category directory is normal - the user may have deleted it,
+		// so a read error is not worth reporting here.
+		_ = m.RestoreDir(dir)
+	}
+	return nil
+}
 
-		// A missing category directory is normal - the user may have deleted it.
-		entries, err := os.ReadDir(dir)
-		if err != nil {
+// RestoreDir rebuilds the unfinished tasks found in one directory.
+//
+// Restore only walks the configured directories, but the CLI can be pointed at
+// any directory with -o, so it needs the same recovery for a directory the
+// settings do not know about. Otherwise every new process starts from byte zero
+// and the ".fd!" file it left behind is a lie.
+func (m *Manager) RestoreDir(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	category := ""
+	for _, c := range m.Config().Categories {
+		if filepath.Clean(c.Dir) == filepath.Clean(dir) {
+			category = c.ID
+		}
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), DataSuffix+JournalSuffix) {
 			continue
 		}
-
-		category := ""
-		for _, c := range cfg.Categories {
-			if c.Dir == dir {
-				category = c.ID
-			}
+		j, err := LoadJournal(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			// Corrupt or already backed up: the data file alone cannot be
+			// trusted, so it is left for the user to inspect.
+			continue
 		}
+		if len(j.Blocks) == 0 {
+			continue
+		}
+		m.adopt(j, dir, category)
+	}
+	return nil
+}
 
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), DataSuffix+JournalSuffix) {
-				continue
-			}
-			j, err := LoadJournal(filepath.Join(dir, entry.Name()))
-			if err != nil {
-				// Corrupt or already backed up: the data file alone cannot be
-				// trusted, so it is left for the user to inspect.
-				continue
-			}
-			if len(j.Blocks) == 0 {
-				continue
-			}
-			m.adopt(j, dir, category)
+// Find returns the task that downloads url into dir, or nil. Callers use it to
+// reuse a task restored from disk instead of adding a duplicate that would start
+// over (the CLI's "run the same command again to resume").
+func (m *Manager) Find(url, dir string) *Task {
+	wantURL := strings.TrimSpace(url)
+	wantDir := filepath.Clean(dir)
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, t := range m.tasks {
+		if t.URL == wantURL && filepath.Clean(t.Dir) == wantDir {
+			return t
 		}
 	}
 	return nil

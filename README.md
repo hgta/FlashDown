@@ -6,14 +6,14 @@
 
 ## 系统要求
 
-| 项目 | 要求 |
-|---|---|
-| 系统 | **Windows 10 1809（build 17763）或更高**，或 Windows 11 |
-| 架构 | 64 位（x64） |
-| 运行时 | Microsoft Edge WebView2（Windows 10 / 11 通常已内置） |
-| 磁盘 | 约 20 MB（不含下载内容） |
+| 入口 | 系统 | 运行时 |
+|---|---|---|
+| `flashdown.exe`（图形界面） | **Windows 10 1809（build 17763）或更高**，或 Windows 11 | Microsoft Edge WebView2（Windows 10 / 11 通常已内置） |
+| `flashdown-cli.exe`（命令行） | **Windows 7 SP1 及以上** | 无 |
 
-**不支持 Windows 7 / 8 / 8.1。** Go 1.21+ 与 Wails v3 均以 Windows 10 为下限，WebView2 对 8.1 的支持也已于 2024 年结束。在不支持的系统上启动时，程序会弹窗说明原因，并把详情写入：
+两者均为 64 位（x64），磁盘占用约 20 MB（不含下载内容）。
+
+图形界面**不支持 Windows 7 / 8 / 8.1**：Go 1.21+ 与 Wails v3 均以 Windows 10 为下限，WebView2 对 8.1 的支持也已于 2024 年结束。在这些系统上启动时会弹窗说明原因（并建议改用 `flashdown-cli.exe`），详情写入：
 
 ```
 %LOCALAPPDATA%\FlashDown\startup.log
@@ -21,7 +21,37 @@
 
 ## 下载
 
-从 [Releases](https://github.com/hgta/FlashDown/releases) 取得 `flashdown-<version>-win64.zip`，解压后双击 `flashdown.exe`。
+从 [Releases](https://github.com/hgta/FlashDown/releases) 取得 `flashdown-<version>-win64.zip`，解压得到两个入口：
+
+- 双击 `flashdown.exe` 使用图形界面
+- 在命令行运行 `flashdown-cli.exe` 直接下载
+
+## 命令行模式
+
+没有图形环境、或者系统太旧跑不了 WebView2 时，用 `flashdown-cli.exe`。它复用同一个下载内核（分块、多连接、断点续传、重定向、重试），只是不画界面。
+
+```powershell
+flashdown-cli.exe <链接> [-o 目录] [-n 文件名] [-j 连接数] [-c 类别] [-q]
+
+flashdown-cli.exe https://example.com/big.iso -o D:\DL -j 8
+```
+
+| 参数 | 说明 |
+|---|---|
+| `-o <目录>` | 保存目录，默认取配置里的下载目录 |
+| `-n <文件名>` | 指定文件名，默认由 URL 或响应头推断 |
+| `-j <数量>` | 连接数 1–30，默认取配置值；仅对大于 256 KB 的文件有意义 |
+| `-c <类别>` | 类别 id |
+| `-q` | 不输出进度 |
+| `--version` | 显示版本 |
+
+行为约定：
+
+- 标志与链接可以任意顺序混排（`-j 8 URL`、`URL -j 8` 均可），`--` 之后的全部当作链接
+- `Ctrl+C` 中断后进度落盘，**重跑同一条命令即从断点继续**
+- 退出码：`0` 完成 / `1` 下载失败 / `2` 用法错误 / `130` 已中断（可续传）
+
+前台运行时进度是单行刷新；输出被重定向到文件或管道时，每 10% 打一行，避免刷屏。
 
 ## 功能
 
@@ -49,21 +79,24 @@ cd frontend; npm run build     # 前端类型检查 + 打包
 
 ## 打包发布
 
-推送 `v*` tag 会触发 `.github/workflows/release.yml`：在 `windows-latest` 上构建、压缩、创建 GitHub Release。
+推送到 `v*` tag 会触发 `.github/workflows/release.yml`：在 `windows-latest` 上跑测试、构建 GUI 与 CLI 两个可执行文件、压缩、创建 GitHub Release。
 
 ```powershell
-git tag -a v0.2.0 -m "FlashDown v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "FlashDown v0.3.0"
+git push origin v0.3.0
 ```
 
 ## 结构
 
 ```
 main.go                  启动、窗口装配、平台检查
+cmd/flashdown-cli/       无界面入口（不 import Wails）
 app/                     Wails 服务层（任务、配置、事件广播）
+internal/cli/            命令行参数解析与进度渲染
 internal/engine/         下载内核：分块、Jet、续传、重试（与 UI 无关）
 internal/config/         配置加载与持久化
 internal/startup/        启动诊断：系统版本、WebView2、失败弹窗与日志
+internal/version/        版本号（GUI 与 CLI 共用的唯一来源）
 frontend/                Vue 3 界面
 openspec/                变更提案与规格
 ```

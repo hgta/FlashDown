@@ -38,7 +38,7 @@ func main() {
 	// The GUI subsystem has no console, so every failure below has to reach the
 	// screen through startup.Fail: a log line in a void is what made v0.1.0 look
 	// like "double-click does nothing" on Windows 8.1.
-	info, startErr := startup.Check(nil, nil)
+	info, startErr := startup.CheckFor(startup.ModeGUI, nil, nil)
 	if startErr != nil {
 		startup.Fail(startErr, info)
 	}

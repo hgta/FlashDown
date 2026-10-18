@@ -60,6 +60,30 @@ func TestCheckRefusesWindows10Before1809(t *testing.T) {
 	}
 }
 
+// The CLI never creates a window, so an old OS is a warning rather than a wall.
+func TestCheckForCLIAllowsWindows81(t *testing.T) {
+	info, err := CheckFor(ModeCLI, fixedVersion(6, 3, 9600, true), fixedWebView(""))
+	if err != nil {
+		t.Fatalf("CLI on 8.1 should be allowed: %v", err)
+	}
+	if !info.Unsupported {
+		t.Error("Unsupported = false, the caller needs to know it is degraded")
+	}
+	if info.VersionText() != "6.3.9600" {
+		t.Errorf("VersionText = %q", info.VersionText())
+	}
+}
+
+func TestCheckForCLISkipsWebView2(t *testing.T) {
+	info, err := CheckFor(ModeCLI, fixedVersion(10, 0, 19045, true), fixedWebView(""))
+	if err != nil {
+		t.Fatalf("CLI does not need WebView2: %v", err)
+	}
+	if info.Unsupported {
+		t.Error("Windows 10 should not be flagged as unsupported")
+	}
+}
+
 func TestCheckAllowsUnknownVersion(t *testing.T) {
 	if _, err := Check(fixedVersion(0, 0, 0, false), fixedWebView("120.0")); err != nil {
 		t.Fatalf("unknown version must not block startup: %v", err)
@@ -82,7 +106,7 @@ func TestDescribeUnsupportedNamesVersionAndLog(t *testing.T) {
 	if title != "FlashDown 无法启动" {
 		t.Errorf("title = %q", title)
 	}
-	for _, want := range []string{"6.3.9600", "Windows 10 1809", "startup.log"} {
+	for _, want := range []string{"6.3.9600", "Windows 10 1809", "startup.log", "flashdown-cli.exe"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q:\n%s", want, body)
 		}

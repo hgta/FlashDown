@@ -43,11 +43,19 @@ jobs:
         working-directory: build
         run: wails3 generate syso -arch amd64 -icon windows/icon.ico -manifest windows/wails.exe.manifest -info windows/info.json -out ../wails_windows_amd64.syso
 
-      - name: Build executable
-        run: go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui" -o bin/flashdown.exe
+      # A tag must not publish something the tests would have rejected.
+      - name: Test
+        run: |
+          go vet ./internal/... ./app/... ./cmd/... .
+          go test ./internal/... -count=1
+
+      - name: Build executables
+        run: |
+          go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui" -o bin/flashdown.exe
+          go build -tags production -trimpath -buildvcs=false -ldflags="-w -s" -o bin/flashdown-cli.exe ./cmd/flashdown-cli
 
       - name: Package
-        run: Compress-Archive -Path @('bin/flashdown.exe', 'SYSTEM-REQUIREMENTS.txt') -DestinationPath "flashdown-${{ github.ref_name }}-win64.zip"
+        run: Compress-Archive -Path @('bin/flashdown.exe', 'bin/flashdown-cli.exe', 'SYSTEM-REQUIREMENTS.txt') -DestinationPath "flashdown-${{ github.ref_name }}-win64.zip"
 
       - name: Publish release
         env:

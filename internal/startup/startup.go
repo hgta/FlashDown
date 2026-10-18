@@ -44,6 +44,20 @@ func (e *UnsupportedError) Error() string {
 	return fmt.Sprintf("Windows %s is below the supported minimum (10.0.%d)", e.Version, MinBuild)
 }
 
+// Mode selects how strict the checks are.
+//
+// The GUI cannot exist without WebView2, so it is refused on anything the
+// runtime does not support. The CLI has no such dependency: it runs anyway and
+// leaves a warning, because a download that works beats a refusal that explains.
+type Mode int
+
+const (
+	// ModeGUI is the strict path used by flashdown.exe.
+	ModeGUI Mode = iota
+	// ModeCLI skips WebView2 and tolerates an unsupported OS.
+	ModeCLI
+)
+
 // Info is what the checks learned, kept so the failure dialog and the log can
 // state facts instead of guesses.
 type Info struct {
@@ -51,6 +65,9 @@ type Info struct {
 	OSVersionKnown bool
 	WebView2       string
 	WebView2Source string
+	// Unsupported is set when the OS is below the floor but the caller is the
+	// CLI, which may continue with a warning.
+	Unsupported bool
 }
 
 // VersionText renders the OS version for humans, admitting when it is unknown.
@@ -83,9 +100,19 @@ type WebView2Runtime struct {
 	Source  string // registry, registry-32, disk, or empty
 }
 
-// Check runs both probes. A nil reader means "use the real one", which keeps
-// main free of build tags and lets tests substitute fakes.
+// Check is the GUI policy: refuse anything that cannot show a window.
+// A nil reader means "use the real one", which keeps main free of build tags
+// and lets tests substitute fakes.
 func Check(readVersion VersionReader, readWebView WebView2Reader) (Info, error) {
+	return CheckFor(ModeGUI, readVersion, readWebView)
+}
+
+// CheckFor applies the policy for one of the two entry points.
+//
+// GUI: both probes are hard requirements. CLI: no window is ever created, so
+// WebView2 is irrelevant and an old OS is only recorded - the caller prints a
+// warning and keeps downloading.
+func CheckFor(mode Mode, readVersion VersionReader, readWebView WebView2Reader) (Info, error) {
 	if readVersion == nil {
 		readVersion = ReadOSVersion
 	}
@@ -98,8 +125,16 @@ func Check(readVersion VersionReader, readWebView WebView2Reader) (Info, error) 
 		info.OSVersionKnown = true
 		info.OSVersion = fmt.Sprintf("%d.%d.%d", major, minor, build)
 		if !atLeast(major, minor, build, MinMajor, MinMinor, MinBuild) {
+			if mode == ModeCLI {
+				info.Unsupported = true
+				return info, nil
+			}
 			return info, &UnsupportedError{Version: info.OSVersion}
 		}
+	}
+
+	if mode == ModeCLI {
+		return info, nil
 	}
 
 	runtime := readWebView()
@@ -110,6 +145,15 @@ func Check(readVersion VersionReader, readWebView WebView2Reader) (Info, error) 
 	}
 
 	return info, nil
+}
+
+// WarnPlatform records that the CLI is running on an OS nobody supports. It
+// never blocks and never shows a dialog: a command-line user wants the bytes.
+func WarnPlatform(info Info) {
+	line := fmt.Sprintf("%s stage=platform-warning os=%s webview2=%s error=%q",
+		time.Now().Format(time.RFC3339), info.VersionText(), info.WebView2Text(),
+		"running on an unsupported Windows version")
+	_ = writeLogTo(LogPath(), line)
 }
 
 // atLeast compares dotted versions, which is not the same as comparing each
@@ -137,6 +181,8 @@ func Describe(err error, info Info) (title, body, link string) {
 	case errors.As(err, &unsupported):
 		fmt.Fprintf(&b, "原因：当前系统 Windows %s 不受支持。\n", unsupported.Version)
 		fmt.Fprintf(&b, "要求：Windows 10 1809（10.0.%d）或更高版本，64 位。\n", MinBuild)
+		b.WriteString("\n如果只想下载文件，可以用同目录下的 flashdown-cli.exe：\n")
+		b.WriteString("    flashdown-cli.exe https://example.com/file.zip\n")
 	case errors.Is(err, ErrWebView2Missing):
 		b.WriteString("原因：未找到 Microsoft Edge WebView2 运行时。\n")
 		b.WriteString("Windows 10 / 11 通常已内置；缺失时可以从微软官网免费安装。\n")

@@ -11,3 +11,4 @@ build/android/overlay.json
 build/android/gen/
 # Gradle cache: per-machine, and its lock files are held while Studio is open
 build/android/.gradle/
+build/android/build/

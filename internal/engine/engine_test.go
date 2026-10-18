@@ -867,6 +867,56 @@ func TestRestoreRebuildsPausedTask(t *testing.T) {
 	assertFile(t, filepath.Join(dir, "file.bin"), payload)
 }
 
+// The CLI downloads into whatever -o names, which need not be one of the
+// configured directories, so recovery has to be possible for one directory at a
+// time. Without it a second run of the same command starts from byte zero.
+func TestRestoreDirFindsTaskOutsideConfig(t *testing.T) {
+	payload := patternBytes(1 << 20)
+	ts := newTestServer(t, serverOpts{
+		payload:    payload,
+		etag:       `"v1"`,
+		chunkSize:  64 << 10,
+		chunkDelay: 15 * time.Millisecond,
+	})
+
+	dir := t.TempDir()
+	m := New(testConfig(dir))
+	task, err := m.Add(Spec{URL: ts.URL(), Dir: dir, Category: "test"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := m.Start(task.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitUntil(t, "progress", func() bool { return task.Done() > 0 })
+	_ = m.Pause(task.ID)
+	waitState(t, task, StatePaused)
+	partial := task.Done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m.Shutdown(ctx)
+
+	// A fresh manager whose configured download root is somewhere else entirely.
+	m2 := New(testConfig(t.TempDir()))
+	if err := m2.RestoreDir(dir); err != nil {
+		t.Fatalf("restore dir: %v", err)
+	}
+	restored := m2.Find(ts.URL(), dir)
+	if restored == nil {
+		t.Fatal("Find did not return the restored task")
+	}
+	if got := restored.Done(); got != partial || got <= 0 {
+		t.Fatalf("restored progress = %d, want %d", got, partial)
+	}
+
+	if err := m2.Start(restored.ID); err != nil {
+		t.Fatalf("start restored: %v", err)
+	}
+	waitState(t, restored, StateFinished)
+	assertFile(t, filepath.Join(dir, restored.Name()), payload)
+}
+
 /* -------------------------------------------------------------------- journal */
 
 func TestJournalRoundTrip(t *testing.T) {
