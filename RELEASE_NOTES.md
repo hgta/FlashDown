@@ -1,39 +1,67 @@
-# FlashDown v0.2.1
+# FlashDown v0.3.0
 
-本次发布的重点不是新功能，而是**让失败开口说话**。
-
-> v0.2.0 的构建里版本号没有更新（程序内显示 0.1.0），本版修正该问题；功能与 v0.2.0 相同。
+本版加入**无界面命令行入口**：同一套下载内核，不再依赖 WebView2，Windows 7 SP1 及以上也能用。
 
 ## 本版变化
 
-**启动失败不再静默**
+**新增 `flashdown-cli.exe`**
 
-v0.1.0 在不受支持的系统上双击后毫无反应——因为没有控制台的 GUI 进程把错误写进了看不见的 stderr。
-现在启动前会检查系统版本与 WebView2 运行时，不满足时弹出说明窗口，并把详情写入：
+图形界面需要 WebView2，而 WebView2 止步于 Windows 8.1；下载内核本身没有这个限制，所以补上一个命令
+行入口。它复用同一份 engine（分块、多连接、断点续传、重定向、重试），只是不画界面，单文件约 9 MB，
+启动不需要任何运行时。
 
+```powershell
+flashdown-cli.exe <链接> [-o 目录] [-n 文件名] [-j 连接数] [-c 类别] [-q]
+
+flashdown-cli.exe https://example.com/big.iso -o D:\DL -j 8
 ```
-%LOCALAPPDATA%\FlashDown\startup.log
-```
 
-弹窗包含：具体原因、当前系统版本、WebView2 检测结果、日志路径。缺少 WebView2 时可以直接点「确定」打开微软下载页。
+- 标志与链接可以任意顺序混排；`--` 之后的全部当作链接
+- 前台单行刷新进度；输出被重定向时每 10% 一行
+- `Ctrl+C` 中断后进度落盘，**重跑同一条命令即从断点继续**
+- 退出码：`0` 完成 / `1` 下载失败 / `2` 用法错误 / `130` 已中断
 
-**系统要求写清楚了**
+**修掉一处会让续传失效的实现错误**
 
-README、本说明、以及压缩包内的 `SYSTEM-REQUIREMENTS.txt` 都声明了最低配置，不再让用户自己猜。
+v0.2.x 的进度记录（`<文件名>.fd!` 与 `.fd!.state`）只由图形界面在启动时扫描恢复。命令行每次都是新建
+任务，看不到磁盘上已有的进度，于是"中断后重跑同一条命令"实际会从 0 字节重新下载——提示语和实际行为
+不一致。现在启动时会先读取目标目录里的未完成任务（`-o` 指向的目录同样有效），命中则以续传方式继续，
+并在首行打印「继续未完成的下载：<文件名>」。用 26.9 MB 文件实测：中断在 17.8% 后重跑，从 17.8% 继续，
+最终 SHA256 与官方源一致。
+
+**启动检查按入口分模式**
+
+图形界面依旧严格：系统版本或 WebView2 不满足就直接弹窗说明，弹窗里新增一句提示——可以用同目录下的
+`flashdown-cli.exe` 下载。命令行模式跳过 WebView2 检查，系统版本过低只写一条 `stage=platform-warning`
+日志后继续下载。
+
+**版本号只有一个来源**
+
+版本串移到 `internal/version`，GUI 与 CLI 共用，避免再出现 v0.2.0 那种"构建里版本号没更新"的情况。
 
 ## 下载
 
-`flashdown-v0.2.1-win64.zip` → 解压得到 `flashdown.exe` 与 `SYSTEM-REQUIREMENTS.txt`，双击 `flashdown.exe` 即可运行。
+`flashdown-v0.3.0-win64.zip` 解压得到：
+
+| 文件 | 用途 |
+|---|---|
+| `flashdown.exe` | 图形界面 |
+| `flashdown-cli.exe` | 命令行下载 |
+| `SYSTEM-REQUIREMENTS.txt` | 两个入口各自的系统要求 |
 
 ## 系统要求
 
-- **Windows 10 1809（build 17763）或更高**，或 Windows 11，**64 位**
-- Microsoft Edge WebView2 运行时（Windows 10 / 11 通常已内置）
+| 入口 | 系统 | 运行时 |
+|---|---|---|
+| `flashdown.exe` | Windows 10 1809（build 17763）或更高，或 Windows 11 | Microsoft Edge WebView2 |
+| `flashdown-cli.exe` | Windows 7 SP1 及以上 | 无 |
 
-**Windows 7 / 8 / 8.1 不受支持。** 这些系统缺少运行图形界面所需的组件（Go 1.21+ 与 WebView2 均以 Windows 10 为下限）。
-本版在这些系统上启动时会明确弹窗告知，而不是像 v0.1.0 那样毫无反应。
+均为 64 位（x64）。
 
-## 功能（延续 v0.1.0）
+**图形界面不支持 Windows 7 / 8 / 8.1**，这些系统上双击 `flashdown.exe` 会弹窗说明并退出；
+`flashdown-cli.exe` 在这些系统上仍可正常下载。
+
+## 功能（延续 v0.2.x）
 
 - 多连接分块下载，默认 5 条连接，可在「任务 → 连接数」切换 1 / 3 / 5 / 8 / 16 / 30，下载途中调整立即生效
 - 断点续传：暂停、退出、重启后从断点继续，字节级校验
@@ -45,10 +73,12 @@ README、本说明、以及压缩包内的 `SYSTEM-REQUIREMENTS.txt` 都声明�
 ## 已知限制
 
 - 仅 Windows x64
+- 命令行模式已在 Windows 10 / 11 x64 实测；Windows 7 / 8 / 8.1 为按设计支持（无 WebView2 依赖），尚未实机验证
+- 小于 256 KB 的文件只有一个分块，`-j` 设置不会带来并发
 - 批量 URL 预览、限速、类别规则编辑、计划任务尚未实现
 - 多连接对单 IP 限速的服务器无提速效果
-- 旧系统（7 / 8 / 8.1）的无界面下载模式正在评估，尚未提供
 
 ## 校验
 
-发布包由 GitHub Actions 从 tag 构建，构建脚本见 `.github/workflows/release.yml`。
+发布包由 GitHub Actions 从 tag 构建（先跑 `go vet` 与 `go test ./internal/...`，再构建两个可执行文件），
+构建脚本见 `.github/workflows/release.yml`。
